@@ -12,12 +12,13 @@ The script shows a GitHub sign-in code.
 Use an approved account with access to the private xVend project.
 Public access to this script does not grant access to the installer.
 
-Setup asks for the Machine name, type, Fleet address, Tech PIN and Staff PIN.
+Setup asks for the Machine name, Fleet address, Tech PIN and Staff PIN.
+Use Up and Down to select the Machine type. Press Enter to confirm.
 It installs the selected Core and its default settings.
 Local setup can finish before Fleet approval.
 A Fleet admin matches the Machine name, type and code on the Machines page.
 
-Current installer: `setup-2026.10.03.2`.
+Current installer: `setup-2026.10.03.3`.
 Its exact archive hash is pinned in the script.
 The installer and signed Core packages stay in the private project.
 
