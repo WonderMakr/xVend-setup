@@ -18,7 +18,7 @@ It installs the selected Core and its default settings.
 Local setup can finish before Fleet approval.
 A Fleet admin matches the Machine name, type and code on the Machines page.
 
-Current installer: `setup-2026.10.05.3`.
+Current installer: `setup-2026.10.05.4`.
 Its exact archive hash is pinned in the script.
 The installer and signed Core packages stay in the private project.
 
