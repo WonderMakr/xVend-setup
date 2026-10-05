@@ -15,7 +15,7 @@ import signal
 import subprocess
 import tempfile
 
-PIN = ('WonderMakr/wonderwall-vending-prototype', 'setup-2026.10.03.3', 'xvend-setup.tar.gz', '12d0391871c68d6524962201879803ab6712dbb7c5a3f3a063a01462209ce25d')
+PIN = ('WonderMakr/wonderwall-vending-prototype', 'setup-2026.10.05.1', 'xvend-setup.tar.gz', '653e6a10c808bc12dc0bc10a9d7044401010c76abf48d6d2a5b0f3b2139a6f94')
 ROOT_HANDOFF = '"""Reviewed root handoff, embedded by the builder in the pinned launcher.\n\nNever import or execute a user-owned file. Check a protected archive copy first.\n"""\nimport hashlib\nimport json\nimport os\nfrom pathlib import Path, PurePosixPath\nimport re\nimport shutil\nimport subprocess\nimport sys\nimport tarfile\nimport tempfile\n\n\ndef unique_object(pairs):\n    result = {}\n    for key, value in pairs:\n        if key in result:\n            raise ValueError("duplicate JSON field")\n        result[key] = value\n    return result\n\n\ndef safe_name(name):\n    return (bool(name) and "\\\\" not in name and ":" not in name and\n            "\\0" not in name and not PurePosixPath(name).is_absolute() and\n            all(part not in ("", ".", "..") for part in name.split("/")))\n\n\ndef handoff(archive, digest):\n    if os.geteuid() != 0:\n        raise ValueError("root staging requires sudo")\n    os.umask(0o077)\n    with tempfile.TemporaryDirectory(prefix="xvend-root-", dir="/var/tmp") as temporary:\n        root = Path(temporary)\n        # mkdtemp creates mode 0700 with this process as owner.\n        # Copy once, then check and use only this private copy.\n        protected = root / "setup.tar.gz"\n        with Path(archive).open("rb") as source, protected.open("xb") as target:\n            shutil.copyfileobj(source, target)\n        if hashlib.sha256(protected.read_bytes()).hexdigest() != digest:\n            raise ValueError("archive hash failed at root handoff; get the approved launcher and retry")\n        bundle = root / "bundle"\n        bundle.mkdir(mode=0o700)\n        with tarfile.open(protected, "r:gz") as tar:\n            members = tar.getmembers()\n            names = [member.name for member in members]\n            if len(names) != len(set(names)) or any(\n                    not safe_name(member.name) or not member.isfile() for member in members):\n                raise ValueError("unsafe archive paths or links; get a new approved bundle")\n            descriptor = json.load(tar.extractfile("bundle.json"), object_pairs_hook=unique_object)\n            if descriptor.get("format") != 1 or not isinstance(descriptor.get("files"), dict):\n                raise ValueError("unknown bundle format; get a new approved bundle")\n            if set(descriptor["files"]) != set(names) - {"bundle.json"}:\n                raise ValueError("bundle coverage failed; get a new approved bundle")\n            for member in members:\n                data = tar.extractfile(member).read()\n                if member.name != "bundle.json" and hashlib.sha256(data).hexdigest() != descriptor["files"][member.name]:\n                    raise ValueError("bundle file hash failed; get a new approved bundle")\n                if re.search(br"(?m)^-----BEGIN [A-Z ]*PRIVATE KEY-----\\r?$", data):\n                    raise ValueError("private key in bundle; ask the operator for a public-key-only bundle")\n            for member in members:\n                path = bundle / member.name\n                path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)\n                with path.open("xb") as target:\n                    target.write(tar.extractfile(member).read())\n                path.chmod(0o600)\n        with open("/dev/tty", "r") as terminal:\n            subprocess.run([sys.executable, "-I", str(bundle / "deploy/machine/setup.py"),\n                            "--bundle", str(bundle)], stdin=terminal, check=True,\n                           env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8"})\n\n\nif __name__ == "__main__":\n    try:\n        handoff(sys.argv[1], sys.argv[2])\n    except ValueError as error:\n        print("Setup stopped: " + str(error))\n        raise SystemExit(1)\n    except (OSError, KeyError, tarfile.TarError, subprocess.SubprocessError):\n        print("Root setup failed. Check disk space and the approved bundle. Retry setup.")\n        raise SystemExit(1)\n'
 
 
@@ -53,7 +53,9 @@ def main():
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     if len(Path("/proc/swaps").read_text().splitlines()) != 1:
         raise ValueError("Swap is active. It can save login data to disk. Run sudo swapoff -a, then retry setup. Ask the operator to keep swap off for this login.")
-    if Path("/sys/power/resume").read_text().strip() != "0:0":
+    # Raspberry Pi kernels have no hibernation, so no resume file: nothing to refuse.
+    resume = Path("/sys/power/resume")
+    if resume.exists() and resume.read_text().strip() != "0:0":
         raise ValueError("A hibernation resume device is set. It can save login data to disk. Ask the operator to remove the resume setting, reboot, then retry setup.")
     if shutil.which("gh") is None or not Path("/etc/ssl/certs/ca-certificates.crt").is_file():
         run(["sudo", "apt-get", "update"])
@@ -127,9 +129,16 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("Setup cancelled. Login files were cleared if cleanup completed. Retry setup when ready.")
         raise SystemExit(1)
-    except (OSError, subprocess.SubprocessError):
-        # Do not echo command arguments or login values.
-        print("Setup tool failed. Check the message above, network access, and sudo access. Retry the approved launcher.")
+    except OSError as error:
+        # Name the cause from the error's type, reason and path only:
+        # never echo command arguments or login values.
+        cause = type(error).__name__ + ": " + (error.strerror or "no reason given")
+        if error.filename is not None:
+            cause += ": " + str(error.filename)
+        print("Setup tool failed. " + cause + ". Retry the approved launcher after fixing it.")
+        raise SystemExit(1)
+    except subprocess.SubprocessError as error:
+        print("Setup tool failed. " + type(error).__name__ + ". Check network access and sudo access. Retry the approved launcher.")
         raise SystemExit(1)
 
 XVEND_SETUP_PY
